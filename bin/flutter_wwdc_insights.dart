@@ -153,7 +153,9 @@ void main(List<String> arguments) async {
         url,
         includeRecommendedActions: includeRecommendedActions,
       );
-      print('Parsed session: ${mdFile.absolute.path}');
+      if (mdFile.existsSync()) {
+        print('Parsed session: ${mdFile.absolute.path}');
+      }
     }
   } catch (e, stackTrace) {
     print('An error occurred while parsing the sessions list: $e');
@@ -183,6 +185,11 @@ Future<void> _processSessionUrl({
 
   try {
     final insights = await parser.parseUrl(url);
+
+    if (insights.transcript.isEmpty) {
+      print('\n[Skipped] No transcript for: $url');
+      return;
+    }
 
     // Basic markdown generation
     var mdContent = insights.toMarkdown();

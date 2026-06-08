@@ -312,6 +312,11 @@ void main() {
     <h1>Mock WWDC Video from CLI Cache</h1>
     <p>Mock description text</p>
   </li>
+  <section id="transcript-content">
+    <p>
+      <span class="sentence">This is a mock transcript sentence to prevent skipping.</span>
+    </p>
+  </section>
 </body>
 </html>
 ''');
@@ -362,6 +367,11 @@ void main() {
     <h1>Mock WWDC Video from CLI Env Cache</h1>
     <p>Mock description text</p>
   </li>
+  <section id="transcript-content">
+    <p>
+      <span class="sentence">This is a mock transcript sentence to prevent skipping.</span>
+    </p>
+  </section>
 </body>
 </html>
 ''');
@@ -461,6 +471,11 @@ void main() {
     <h1>Mock WWDC Video from CLI Output Cache</h1>
     <p>Mock description text</p>
   </li>
+  <section id="transcript-content">
+    <p>
+      <span class="sentence">This is a mock transcript sentence to prevent skipping.</span>
+    </p>
+  </section>
 </body>
 </html>
 ''');
@@ -517,6 +532,11 @@ void main() {
     <h1>Mock WWDC Video for Parse Only</h1>
     <p>Mock description text</p>
   </li>
+  <section id="transcript-content">
+    <p>
+      <span class="sentence">This is a mock transcript sentence to prevent skipping.</span>
+    </p>
+  </section>
 </body>
 </html>
 ''');
@@ -575,6 +595,11 @@ void main() {
     <h1>Mock WWDC Video for Path Test</h1>
     <p>Mock description text</p>
   </li>
+  <section id="transcript-content">
+    <p>
+      <span class="sentence">This is a mock transcript sentence to prevent skipping.</span>
+    </p>
+  </section>
 </body>
 </html>
 ''');
@@ -601,6 +626,89 @@ void main() {
       expect(result.stdout, contains(expectedOutputFile.absolute.path));
 
       tempDir.deleteSync(recursive: true);
+    });
+
+    test('Extracts transcript from HLS subtitles when page transcript is missing', () async {
+      final mockHtmlWithoutTranscript = '''
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mock WWDC Video Without Transcript</title>
+  <meta property="og:video" content="https://devstreaming-cdn.apple.com/videos/wwdc/2026/258/4/66/cmaf.m3u8" />
+</head>
+<body>
+  <li class="supplement details">
+    <h1>Mock WWDC Video</h1>
+    <p>Mock About Description</p>
+  </li>
+</body>
+</html>
+''';
+
+      const mockMasterManifest = '''
+#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="en",NAME="English",AUTOSELECT=YES,DEFAULT=YES,URI="subtitles/en/prog_index.m3u8",FORCED=NO
+''';
+
+      const mockSubtitlePlaylist = '''
+#EXTM3U
+#EXT-X-VERSION:6
+#EXTINF:6.0
+sequence_0.webvtt
+#EXTINF:6.0
+sequence_1.webvtt
+#EXT-X-ENDLIST
+''';
+
+      const mockVtt0 = '''
+WEBVTT
+
+00:00:00.000 --> 00:00:06.000
+Hello, this is the first segment of the video.
+We are talking about version 2.5 of Xcode.
+''';
+
+      const mockVtt1 = '''
+WEBVTT
+
+00:00:06.000 --> 00:00:12.000
+And here is the second segment.
+Have a nice day!
+''';
+
+      var requestCount = 0;
+      final mockClient = MockClient((request) async {
+        requestCount++;
+        final path = request.url.toString();
+        if (path == 'https://developer.apple.com/videos/play/wwdc2026/258/') {
+          return http.Response(mockHtmlWithoutTranscript, 200);
+        } else if (path == 'https://devstreaming-cdn.apple.com/videos/wwdc/2026/258/4/66/cmaf.m3u8') {
+          return http.Response(mockMasterManifest, 200);
+        } else if (path == 'https://devstreaming-cdn.apple.com/videos/wwdc/2026/258/4/66/subtitles/en/prog_index.m3u8') {
+          return http.Response(mockSubtitlePlaylist, 200);
+        } else if (path == 'https://devstreaming-cdn.apple.com/videos/wwdc/2026/258/4/66/subtitles/en/sequence_0.webvtt') {
+          return http.Response(mockVtt0, 200);
+        } else if (path == 'https://devstreaming-cdn.apple.com/videos/wwdc/2026/258/4/66/subtitles/en/sequence_1.webvtt') {
+          return http.Response(mockVtt1, 200);
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final parser = WwdcParser(
+        cacheDirectory: null, // disable caching to force client fetches
+        httpClient: mockClient,
+      );
+
+      final insights = await parser.parseUrl('https://developer.apple.com/videos/play/wwdc2026/258/');
+
+      expect(insights.transcript.length, equals(1));
+      expect(insights.transcript[0].sentences.length, equals(4));
+      expect(insights.transcript[0].sentences[0], equals('Hello, this is the first segment of the video.'));
+      expect(insights.transcript[0].sentences[1], equals('We are talking about version 2.5 of Xcode.'));
+      expect(insights.transcript[0].sentences[2], equals('And here is the second segment.'));
+      expect(insights.transcript[0].sentences[3], equals('Have a nice day!'));
+      expect(requestCount, equals(5));
     });
   });
 }

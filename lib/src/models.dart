@@ -125,6 +125,30 @@ class WwdcVideoInsights {
     required this.codeSnippets,
   });
 
+  WwdcVideoInsights copyWith({
+    String? url,
+    String? title,
+    String? aboutDescription,
+    List<WwdcChapter>? chapters,
+    List<WwdcResource>? resources,
+    List<WwdcRelatedVideo>? relatedVideos,
+    List<WwdcChapterSummary>? summary,
+    List<WwdcTranscriptParagraph>? transcript,
+    List<WwdcCodeSnippet>? codeSnippets,
+  }) {
+    return WwdcVideoInsights(
+      url: url ?? this.url,
+      title: title ?? this.title,
+      aboutDescription: aboutDescription ?? this.aboutDescription,
+      chapters: chapters ?? this.chapters,
+      resources: resources ?? this.resources,
+      relatedVideos: relatedVideos ?? this.relatedVideos,
+      summary: summary ?? this.summary,
+      transcript: transcript ?? this.transcript,
+      codeSnippets: codeSnippets ?? this.codeSnippets,
+    );
+  }
+
   /// Generates a sanitized base filename from the [url].
   String get cacheFileName {
     final sanitized = url

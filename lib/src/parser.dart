@@ -18,7 +18,14 @@ class WwdcParser {
   /// If [cacheDirectory] is specified, caching is used.
   Future<WwdcVideoInsights> parseUrl(String url) async {
     final htmlContent = await _getHtml(url);
-    return parseHtml(htmlContent, url: url);
+    var insights = parseHtml(htmlContent, url: url);
+    if (insights.transcript.isEmpty) {
+      final hlsTranscript = await _extractTranscriptFromHls(htmlContent, url);
+      if (hlsTranscript.isNotEmpty) {
+        insights = insights.copyWith(transcript: hlsTranscript);
+      }
+    }
+    return insights;
   }
 
   /// Fetches the HTML at [listUrl], parses all session links (e.g., starting with `/videos/play/`),
@@ -289,5 +296,229 @@ class WwdcParser {
       transcript: transcriptParagraphs,
       codeSnippets: codeSnippets,
     );
+  }
+
+  /// Extracts the transcript from the HLS streams when the HTML transcript is not available.
+  Future<List<WwdcTranscriptParagraph>> _extractTranscriptFromHls(
+    String htmlContent,
+    String url,
+  ) async {
+    try {
+      final document = html_parser.parse(htmlContent);
+      final ogVideoMeta = document.querySelector('meta[property="og:video"]');
+      final ogVideoUrl = ogVideoMeta?.attributes['content'];
+      if (ogVideoUrl == null || ogVideoUrl.isEmpty) {
+        return const [];
+      }
+
+      // 1. Fetch the master HLS manifest
+      final masterManifest = await _fetchUrl(ogVideoUrl);
+
+      // 2. Parse the master manifest to find the subtitle playlist relative URI
+      final masterLines = masterManifest.split('\n');
+      String? subtitleRelativeUri;
+      for (final line in masterLines) {
+        if (line.startsWith('#EXT-X-MEDIA:') && line.contains('TYPE=SUBTITLES')) {
+          if (line.contains('LANGUAGE="en"')) {
+            final uriMatch = RegExp(r'URI="([^"]+)"').firstMatch(line);
+            if (uriMatch != null) {
+              subtitleRelativeUri = uriMatch.group(1);
+              break;
+            }
+          }
+        }
+      }
+
+      // Fallback: if no English track is explicitly labeled, take any subtitle track
+      if (subtitleRelativeUri == null) {
+        for (final line in masterLines) {
+          if (line.startsWith('#EXT-X-MEDIA:') && line.contains('TYPE=SUBTITLES')) {
+            final uriMatch = RegExp(r'URI="([^"]+)"').firstMatch(line);
+            if (uriMatch != null) {
+              subtitleRelativeUri = uriMatch.group(1);
+              break;
+            }
+          }
+        }
+      }
+
+      if (subtitleRelativeUri == null) {
+        return const [];
+      }
+
+      // 3. Resolve the subtitle playlist URL
+      final masterUri = Uri.parse(ogVideoUrl);
+      final subtitlePlaylistUrl = masterUri.resolve(subtitleRelativeUri).toString();
+
+      // 4. Fetch the subtitle playlist
+      final playlistContent = await _fetchUrl(subtitlePlaylistUrl);
+
+      // 5. Parse the subtitle playlist to find all segment URIs
+      final playlistLines = playlistContent.split('\n');
+      final segmentRelativeUris = <String>[];
+      for (final line in playlistLines) {
+        final trimmed = line.trim();
+        if (trimmed.isNotEmpty && !trimmed.startsWith('#')) {
+          segmentRelativeUris.add(trimmed);
+        }
+      }
+
+      if (segmentRelativeUris.isEmpty) {
+        return const [];
+      }
+
+      // 6. Resolve all segment URLs
+      final playlistUri = Uri.parse(subtitlePlaylistUrl);
+      final segmentUrls = segmentRelativeUris
+          .map((uri) => playlistUri.resolve(uri).toString())
+          .toList();
+
+      // 7. Fetch all WebVTT segments concurrently with a concurrency limit of 15
+      final segmentContents = await _fetchUrlsWithLimit(segmentUrls, limit: 15);
+
+      // 8. Parse the WebVTT cues from all segments and combine them
+      final allCues = <String>[];
+      for (final content in segmentContents) {
+        allCues.addAll(_parseWebVttCues(content));
+      }
+
+      if (allCues.isEmpty) {
+        return const [];
+      }
+
+      // 9. Split the combined cues into proper sentences
+      final fullText = allCues.join(' ');
+      final sentences = _splitIntoSentences(fullText);
+
+      // 10. Group the sentences into paragraphs (e.g., 5 sentences per paragraph)
+      final paragraphs = <WwdcTranscriptParagraph>[];
+      final currentSentences = <String>[];
+      for (final sentence in sentences) {
+        currentSentences.add(sentence);
+        if (currentSentences.length >= 5) {
+          paragraphs.add(WwdcTranscriptParagraph(sentences: List.from(currentSentences)));
+          currentSentences.clear();
+        }
+      }
+      if (currentSentences.isNotEmpty) {
+        paragraphs.add(WwdcTranscriptParagraph(sentences: currentSentences));
+      }
+
+      return paragraphs;
+    } catch (e) {
+      // If anything fails during HLS transcript extraction, log it and return empty list (graceful degradation)
+      print('Warning: Failed to extract HLS transcript: $e');
+      return const [];
+    }
+  }
+
+  /// Fetches a list of URLs concurrently with a concurrency limit.
+  Future<List<String>> _fetchUrlsWithLimit(List<String> urls, {int limit = 15}) async {
+    final results = List<String>.filled(urls.length, '');
+    var nextIndex = 0;
+
+    Future<void> runWorker() async {
+      while (nextIndex < urls.length) {
+        final currentIndex = nextIndex++;
+        results[currentIndex] = await _fetchUrl(urls[currentIndex]);
+      }
+    }
+
+    final workers = <Future<void>>[];
+    for (var i = 0; i < limit && i < urls.length; i++) {
+      workers.add(runWorker());
+    }
+    await Future.wait(workers);
+    return results;
+  }
+
+  /// Parses text cues from a WebVTT file content.
+  List<String> _parseWebVttCues(String vttContent) {
+    final lines = vttContent.split('\n');
+    final cueTexts = <String>[];
+    String currentCue = '';
+
+    for (var line in lines) {
+      line = line.trim();
+      if (line.isEmpty) {
+        if (currentCue.isNotEmpty) {
+          cueTexts.add(currentCue);
+          currentCue = '';
+        }
+        continue;
+      }
+      if (line == 'WEBVTT' ||
+          line.startsWith('NOTE') ||
+          line.startsWith('STYLE') ||
+          line.contains('-->')) {
+        continue;
+      }
+      // It's a text line belonging to a cue
+      if (currentCue.isEmpty) {
+        currentCue = line;
+      } else {
+        currentCue += ' $line';
+      }
+    }
+    if (currentCue.isNotEmpty) {
+      cueTexts.add(currentCue);
+    }
+    return cueTexts;
+  }
+
+  /// Splits a continuous block of text into sentences, handling decimal points.
+  List<String> _splitIntoSentences(String text) {
+    final sentences = <String>[];
+    var start = 0;
+
+    for (var i = 0; i < text.length; i++) {
+      final char = text[i];
+      if (char == '.' || char == '!' || char == '?') {
+        // Check if this is a decimal point (preceded and followed by digits)
+        if (i > 0 && i < text.length - 1) {
+          final prevChar = text[i - 1];
+          final nextChar = text[i + 1];
+          if (RegExp(r'\d').hasMatch(prevChar) && RegExp(r'\d').hasMatch(nextChar)) {
+            continue;
+          }
+        }
+
+        // Check if there is whitespace after the punctuation, or if it's the end of the string
+        var isBoundary = false;
+        if (i == text.length - 1) {
+          isBoundary = true;
+        } else {
+          var j = i + 1;
+          while (j < text.length && RegExp(r'\s').hasMatch(text[j])) {
+            j++;
+          }
+          if (j == text.length) {
+            isBoundary = true;
+          } else {
+            final nextNonWs = text[j];
+            if (nextNonWs == nextNonWs.toUpperCase()) {
+              isBoundary = true;
+            }
+          }
+        }
+
+        if (isBoundary) {
+          final sentence = text.substring(start, i + 1).trim();
+          if (sentence.isNotEmpty) {
+            sentences.add(sentence);
+          }
+          start = i + 1;
+        }
+      }
+    }
+
+    if (start < text.length) {
+      final remaining = text.substring(start).trim();
+      if (remaining.isNotEmpty) {
+        sentences.add(remaining);
+      }
+    }
+
+    return sentences;
   }
 }
