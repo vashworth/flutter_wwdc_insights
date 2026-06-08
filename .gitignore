@@ -1,6 +1,6 @@
 # https://dart.dev/tools/private-files
 # Created by `dart pub`
 .dart_tool/
-.cache/
+html_cache/
 output/
 .DS_Store

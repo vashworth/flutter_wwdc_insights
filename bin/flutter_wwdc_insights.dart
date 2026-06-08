@@ -41,6 +41,17 @@ void main(List<String> arguments) async {
       'reccommended-actions',
       abbr: 'r',
       help: 'Generate a list of actions recommended based on the session.',
+      defaultsTo: true,
+    )
+    ..addOption(
+      'output',
+      abbr: 'o',
+      help:
+          'Output directory where the parsed results and AI analysis will be saved.',
+    )
+    ..addFlag(
+      'parse-only',
+      help: 'Only parse the session HTML and skip AI analysis.',
       defaultsTo: false,
     );
 
@@ -61,13 +72,15 @@ void main(List<String> arguments) async {
     exit(1);
   }
 
-  final cacheDirectory = '.cache';
+  final cacheDirectory = 'html_cache';
   final parser = WwdcParser(cacheDirectory: cacheDirectory);
   print('HTML cache directory: $cacheDirectory\n');
 
   final useGeminiCli = results['gemini-cli'] == true;
   String model = results['model'] as String;
   final includeRecommendedActions = results['reccommended-actions'] == true;
+  final customOutput = results['output'] as String?;
+  final parseOnly = results['parse-only'] == true;
 
   final flutterPath = _resolveFlutterPath(results);
   if (useGeminiCli && (flutterPath == null || flutterPath.isEmpty)) {
@@ -87,7 +100,8 @@ void main(List<String> arguments) async {
   }
   final method = useGeminiCli ? 'gemini-cli' : 'genkit';
   final actionsSuffix = includeRecommendedActions ? '/actions' : '';
-  final outputDirectory = 'output/$method/$model$actionsSuffix';
+  final outputDirectory = customOutput ??
+      (parseOnly ? 'output/parsed' : 'output/$method/$model$actionsSuffix');
   print('Output directory: $outputDirectory\n');
 
   List<String> sessionUrls = [];
@@ -99,7 +113,9 @@ void main(List<String> arguments) async {
     sessionUrls = [url];
   }
   try {
-    if (useGeminiCli) {
+    if (parseOnly) {
+      print('Parsing sessions...');
+    } else if (useGeminiCli) {
       print('Running AI analysis via Gemini CLI...');
     } else {
       print('Running AI analysis via Genkit and Gemini...');
@@ -122,6 +138,7 @@ void main(List<String> arguments) async {
         includeRecommendedActions: includeRecommendedActions,
         useGeminiCli: useGeminiCli,
         model: model,
+        parseOnly: parseOnly,
       );
       statusBar?.increment();
     }
@@ -130,6 +147,14 @@ void main(List<String> arguments) async {
     print(
       'Processing ${sessionUrls.length} sessions took ${stopWatch.elapsedMilliseconds / 1000} seconds.',
     );
+    if (parseOnly && (urlList == null || urlList.isEmpty) && url != null && url.isNotEmpty) {
+      final mdFile = _getMarkdownOutputFile(
+        outputDirectory,
+        url,
+        includeRecommendedActions: includeRecommendedActions,
+      );
+      print('Parsed session: ${mdFile.absolute.path}');
+    }
   } catch (e, stackTrace) {
     print('An error occurred while parsing the sessions list: $e');
     print(stackTrace);
@@ -145,6 +170,7 @@ Future<void> _processSessionUrl({
   required bool includeRecommendedActions,
   required bool useGeminiCli,
   required String model,
+  required bool parseOnly,
 }) async {
   final mdFile = _getMarkdownOutputFile(
     outputDirectory,
@@ -162,29 +188,24 @@ Future<void> _processSessionUrl({
     var mdContent = insights.toMarkdown();
 
     // Check for API key or gemini-cli to perform AI analysis
-    final (updatedMdContent, aiAnalysis) = await _runAiRelevanceAnalysis(
-      flutterPath: flutterPath,
-      mdContent: mdContent,
-      includeRecommendedActions: includeRecommendedActions,
-      useGeminiCli: useGeminiCli,
-      model: model,
-    );
+    final (updatedMdContent, aiAnalysis) = parseOnly
+        ? (mdContent, null)
+        : await _runAiRelevanceAnalysis(
+            flutterPath: flutterPath,
+            mdContent: mdContent,
+            includeRecommendedActions: includeRecommendedActions,
+            useGeminiCli: useGeminiCli,
+            model: model,
+          );
     mdContent = updatedMdContent;
 
     // If AI analysis is present, append it to a file in the output directory called "ai_insights.md"
-    if (aiAnalysis == null || aiAnalysis.isEmpty) {
-      return;
-    }
-    final File aiInsightsFile;
-    if (includeRecommendedActions) {
-      aiInsightsFile = File('$outputDirectory/ai_insights.md');
-    } else {
-      aiInsightsFile = File('$outputDirectory/ai_insights.md');
-    }
-    aiInsightsFile.createSync(recursive: true);
-    // Append the session title and the AI analysis
-    final appendContent =
-        '''
+    if (aiAnalysis != null && aiAnalysis.isNotEmpty) {
+      final aiInsightsFile = File('$outputDirectory/ai_insights.md');
+      aiInsightsFile.createSync(recursive: true);
+      // Append the session title and the AI analysis
+      final appendContent =
+          '''
 
 ## ${insights.title}
 URL: $url
@@ -192,7 +213,8 @@ URL: $url
 $aiAnalysis
 
 ''';
-    aiInsightsFile.writeAsStringSync(appendContent, mode: FileMode.append);
+      aiInsightsFile.writeAsStringSync(appendContent, mode: FileMode.append);
+    }
 
     // Save parsed output (plus optional AI analysis) to markdown file
     await _saveMarkdownOutput(mdFile, mdContent);

@@ -18,14 +18,14 @@ void main() {
   <li class="supplement details " data-supplement-id="details">
     <h1>Mock WWDC Video</h1>
     <p>Mock About Description</p>
-    
+
     <h2>Chapters</h2>
     <ul class="no-bullet chapter-list">
       <li class="chapter-item" data-start-time="0" data-chapter-end-time="60" data-chapter-lenght="60" data-chapter-index="1">
         <a href="?time=0">Introduction</a>
       </li>
     </ul>
-    
+
     <h2>Resources</h2>
     <ul class="links small">
       <li class="document"><a href="https://example.com/doc">MockDoc</a></li>
@@ -35,7 +35,7 @@ void main() {
         </ul>
       </li>
     </ul>
-    
+
     <h2>Related Videos</h2>
     <h4>WWDC25</h4>
     <ul class="links small">
@@ -294,12 +294,12 @@ void main() {
 
     test('CLI parses --flutter-path and uses it', () async {
       final tempDir = Directory.systemTemp.createTempSync('wwdc_cli_test');
-      final dotCacheDir = Directory('${tempDir.path}/.cache');
+      final dotCacheDir = Directory('${tempDir.path}/html_cache');
       await dotCacheDir.create(recursive: true);
 
       const expectedFileName = 'developer_apple_com_videos_play_wwdc2025_238.html';
       final cacheFile = File('${dotCacheDir.path}/$expectedFileName');
-      
+
       // Write the mock HTML to the cache file so the CLI reads it instead of hitting the network
       await cacheFile.writeAsString('''
 <!DOCTYPE html>
@@ -336,7 +336,7 @@ void main() {
 
       expect(result.exitCode, equals(0));
       expect(result.stdout, contains('Using Flutter repository path: ${tempDir.path}'));
-      expect(result.stdout, contains('HTML cache directory: .cache'));
+      expect(result.stdout, contains('HTML cache directory: html_cache'));
       expect(result.stdout, contains('Notice: No GEMINI_API_KEY found in environment or temp/txt. Skipping AI analysis.'));
 
       tempDir.deleteSync(recursive: true);
@@ -344,12 +344,12 @@ void main() {
 
     test('CLI falls back to FLUTTER_ROOT environment variable if --flutter-path is omitted', () async {
       final tempDir = Directory.systemTemp.createTempSync('wwdc_cli_env_test');
-      final dotCacheDir = Directory('${tempDir.path}/.cache');
+      final dotCacheDir = Directory('${tempDir.path}/html_cache');
       await dotCacheDir.create(recursive: true);
 
       const expectedFileName = 'developer_apple_com_videos_play_wwdc2025_238.html';
       final cacheFile = File('${dotCacheDir.path}/$expectedFileName');
-      
+
       // Write the mock HTML to the cache file so the CLI reads it instead of hitting the network
       await cacheFile.writeAsString('''
 <!DOCTYPE html>
@@ -385,7 +385,7 @@ void main() {
 
       expect(result.exitCode, equals(0));
       expect(result.stdout, contains('Using Flutter repository path from FLUTTER_ROOT: ${tempDir.path}'));
-      expect(result.stdout, contains('HTML cache directory: .cache'));
+      expect(result.stdout, contains('HTML cache directory: html_cache'));
       expect(result.stdout, contains('Notice: No GEMINI_API_KEY found in environment or temp/txt. Skipping AI analysis.'));
 
       tempDir.deleteSync(recursive: true);
@@ -439,6 +439,168 @@ void main() {
       expect(results['url'], equals('https://developer.apple.com/videos/play/wwdc2025/238/'));
       expect(results['flutter-path'], equals('/path/to/flutter'));
       expect(results['gemini-cli'], isTrue);
+    });
+
+    test('CLI uses custom output directory when --output is provided', () async {
+      final tempDir = Directory.systemTemp.createTempSync('wwdc_cli_output_test');
+      final dotCacheDir = Directory('${tempDir.path}/html_cache');
+      await dotCacheDir.create(recursive: true);
+
+      const expectedFileName = 'developer_apple_com_videos_play_wwdc2025_238.html';
+      final cacheFile = File('${dotCacheDir.path}/$expectedFileName');
+
+      // Write mock HTML
+      await cacheFile.writeAsString('''
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mock Title</title>
+</head>
+<body>
+  <li class="supplement details">
+    <h1>Mock WWDC Video from CLI Output Cache</h1>
+    <p>Mock description text</p>
+  </li>
+</body>
+</html>
+''');
+
+      final scriptPath = p.absolute('bin/flutter_wwdc_insights.dart');
+      final customOutputDir = Directory('${tempDir.path}/custom_output');
+
+      // Run the CLI with --output
+      final result = await Process.run(
+        Platform.executable,
+        [
+          scriptPath,
+          '--url',
+          'https://developer.apple.com/videos/play/wwdc2025/238/',
+          '--output',
+          customOutputDir.path,
+        ],
+        environment: {
+          'WWDC_GEMINI_API_KEY': '',
+        },
+        workingDirectory: tempDir.path,
+      );
+
+      expect(result.exitCode, equals(0));
+      expect(result.stdout, contains('Output directory: ${customOutputDir.path}'));
+
+      // Check that the output file is in the custom output directory
+      final expectedOutputFile = File('${customOutputDir.path}/developer_apple_com_videos_play_wwdc2025_238.md');
+      expect(await expectedOutputFile.exists(), isTrue);
+
+      final outputContent = await expectedOutputFile.readAsString();
+      expect(outputContent, contains('# Mock WWDC Video from CLI Output Cache'));
+
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('CLI with --parse-only runs successfully and skips AI analysis', () async {
+      final tempDir = Directory.systemTemp.createTempSync('wwdc_cli_parse_only_test');
+      final dotCacheDir = Directory('${tempDir.path}/html_cache');
+      await dotCacheDir.create(recursive: true);
+
+      const expectedFileName = 'developer_apple_com_videos_play_wwdc2025_238.html';
+      final cacheFile = File('${dotCacheDir.path}/$expectedFileName');
+
+      // Write mock HTML
+      await cacheFile.writeAsString('''
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mock Title</title>
+</head>
+<body>
+  <li class="supplement details">
+    <h1>Mock WWDC Video for Parse Only</h1>
+    <p>Mock description text</p>
+  </li>
+</body>
+</html>
+''');
+
+      final scriptPath = p.absolute('bin/flutter_wwdc_insights.dart');
+
+      // Run the CLI with --parse-only
+      final result = await Process.run(
+        Platform.executable,
+        [
+          scriptPath,
+          '--url',
+          'https://developer.apple.com/videos/play/wwdc2025/238/',
+          '--parse-only',
+        ],
+        environment: {
+          'WWDC_GEMINI_API_KEY': 'mock_key',
+        },
+        workingDirectory: tempDir.path,
+      );
+
+      expect(result.exitCode, equals(0));
+      expect(result.stdout, contains('Output directory: output/parsed'));
+      expect(result.stdout, contains('Parsing sessions...'));
+      expect(result.stdout, isNot(contains('Running AI analysis')));
+      expect(result.stdout, isNot(contains('Notice: No GEMINI_API_KEY found')));
+
+      // Check that the output file is in the default parsed directory
+      final expectedOutputFile = File('${tempDir.path}/output/parsed/developer_apple_com_videos_play_wwdc2025_238.md');
+      expect(await expectedOutputFile.exists(), isTrue);
+
+      final outputContent = await expectedOutputFile.readAsString();
+      expect(outputContent, contains('# Mock WWDC Video for Parse Only'));
+      expect(outputContent, isNot(contains('## AI Relevance & Importance Analysis')));
+
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('CLI with --parse-only and single session video prints the absolute path of output md file', () async {
+      final tempDir = Directory.systemTemp.createTempSync('wwdc_cli_parse_only_path_test');
+      final dotCacheDir = Directory('${tempDir.path}/html_cache');
+      await dotCacheDir.create(recursive: true);
+
+      const expectedFileName = 'developer_apple_com_videos_play_wwdc2025_238.html';
+      final cacheFile = File('${dotCacheDir.path}/$expectedFileName');
+
+      // Write mock HTML
+      await cacheFile.writeAsString('''
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mock Title</title>
+</head>
+<body>
+  <li class="supplement details">
+    <h1>Mock WWDC Video for Path Test</h1>
+    <p>Mock description text</p>
+  </li>
+</body>
+</html>
+''');
+
+      final scriptPath = p.absolute('bin/flutter_wwdc_insights.dart');
+
+      // Run the CLI with --parse-only
+      final result = await Process.run(
+        Platform.executable,
+        [
+          scriptPath,
+          '--url',
+          'https://developer.apple.com/videos/play/wwdc2025/238/',
+          '--parse-only',
+        ],
+        environment: {
+          'WWDC_GEMINI_API_KEY': 'mock_key',
+        },
+        workingDirectory: tempDir.path,
+      );
+
+      expect(result.exitCode, equals(0));
+      final expectedOutputFile = File('${tempDir.path}/output/parsed/developer_apple_com_videos_play_wwdc2025_238.md');
+      expect(result.stdout, contains(expectedOutputFile.absolute.path));
+
+      tempDir.deleteSync(recursive: true);
     });
   });
 }

@@ -12,7 +12,7 @@ class WwdcParser {
   /// Optional HTTP client. If null, a new [http.Client] is created for the request.
   final http.Client? httpClient;
 
-  WwdcParser({this.cacheDirectory = '.cache', this.httpClient});
+  WwdcParser({this.cacheDirectory = 'html_cache', this.httpClient});
 
   /// Fetches and parses the WWDC video page at [url].
   /// If [cacheDirectory] is specified, caching is used.
